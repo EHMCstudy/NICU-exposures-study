@@ -1,0 +1,9 @@
+cohort_group,assay,sample_count,sample_age_median_days,sample_age_q25_days,sample_age_q75_days
+All infants,S100A8/A9 level (ELISA),1063,21,8,35
+All infants,Total bacterial load (qPCR),560,21,8,35
+All infants,Microbiome (16S rRNA sequencing),472,22,14,35
+All infants,Untargeted metabolome,383,21,7,32.5
+Infants without NEC,S100A8/A9 level (ELISA),943,21,8,35
+Infants without NEC,Total bacterial load (qPCR),464,21,8,34
+Infants without NEC,Microbiome (16S rRNA sequencing),390,21,14,35
+Infants without NEC,Untargeted metabolome,309,21,2,29
