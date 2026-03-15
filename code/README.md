@@ -4,7 +4,8 @@ This directory contains the analysis script associated with the current manuscri
 
 ## File
 
-- `FB_ABT_unload_final_2025.12.Rmd`: public entrypoint that sources the modular analysis scripts
+- `nicu_exposures_representative_workflow.Rmd`: primary public entrypoint for the representative workflow
+- `FB_ABT_unload_final_2025.12.Rmd`: compatibility entrypoint retained for legacy references
 
 ## Analysis modules
 

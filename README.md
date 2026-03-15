@@ -8,7 +8,8 @@ This repository was prepared by the study team to provide the public code locati
 
 ## Contents
 
-- `code/FB_ABT_unload_final_2025.12.Rmd`: public entrypoint for the representative workflow
+- `code/nicu_exposures_representative_workflow.Rmd`: primary public entrypoint for the representative workflow
+- `code/FB_ABT_unload_final_2025.12.Rmd`: compatibility entrypoint retained for legacy references
 - `code/R/`: modular analysis scripts grouped by method block
 - `code/workflows/`: compact result-oriented scripts aligned with the manuscript sections and figures
 - `data/metadata/`: de-identified metadata and summary tables derived from Supplementary Tables S1 and S2

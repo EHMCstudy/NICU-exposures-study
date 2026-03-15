@@ -4,128 +4,18 @@ output: html_document
 date: "2025-12-06"
 ---
 
-# Representative analysis workflow
+# Legacy entrypoint
 
-This public script is the entrypoint for the representative analysis workflow used in the public repository.
+This file is retained as a compatibility entrypoint for readers who were previously directed to `FB_ABT_unload_final_2025.12.Rmd`.
 
-`Neonatal Intensive Care Unit Exposures Reprogram Microbiome-Metabolome Trajectories and Modulate Host Calprotectin in Preterm Infants: A Longitudinal Multi-omics Study`
-
-The code has been split into focused analysis modules and compact results-oriented workflow scripts so that external readers can review either the method blocks or the manuscript-aligned analysis sections. Internal study tables can be mapped to standardized public-facing column names before analysis.
+Please use `nicu_exposures_representative_workflow.Rmd` as the primary public entrypoint for the representative workflow.
 
 ```{r}
-module_dir <- if (dir.exists("R")) "R" else file.path("code", "R")
-module_files <- c(
-  "00_setup.R",
-  "01_data_standardization.R",
-  "02_multivariate_analysis.R",
-  "03_mixed_models.R",
-  "04_interomics_network.R",
-  "05_mediation_sensitivity.R"
-)
-
-for (module_file in module_files) {
-  source(file.path(module_dir, module_file), local = globalenv())
+primary_entrypoint <- if (file.exists("nicu_exposures_representative_workflow.Rmd")) {
+  "nicu_exposures_representative_workflow.Rmd"
+} else {
+  file.path("code", "nicu_exposures_representative_workflow.Rmd")
 }
-```
 
-# Module structure
-
-- `R/00_setup.R`: package loading, plotting theme, color palette
-- `R/01_data_standardization.R`: public-facing column mapping and table standardization
-- `R/02_multivariate_analysis.R`: composition plotting, PERMANOVA, dbRDA
-- `R/03_mixed_models.R`: adjusted mixed-effects models and heatmap summaries
-- `R/04_interomics_network.R`: Procrustes summaries and MetaNet inter-omics network construction
-- `R/05_mediation_sensitivity.R`: conservative infant-level mediation sensitivity analysis
-
-# Manuscript-oriented workflow scripts
-
-- `workflows/01_preterm_gut_overview.R`: Figure 1 / early colonization overview
-- `workflows/02_nicu_exposures_microbiome.R`: Figure 2 / NICU exposures and microbiome structure
-- `workflows/03_antibiotic_regimen_effects.R`: Figure 3 / regimen-specific antibiotic effects
-- `workflows/04_metabolome_interomics.R`: Figure 4 / metabolome and inter-omics integration
-- `workflows/05_calprotectin_axis.R`: Figure 5 / calprotectin-associated analyses and conservative mediation sensitivity
-
-# Notes on release scope
-
-This public workflow focuses on analytical components that can be documented clearly and defended directly from the released code.
-
-Module-based metabolite analyses in the internal study workflow relied on locked eigengene objects generated during the project analysis. Those internal objects are not rebuilt here in order to avoid presenting a weaker ad hoc reconstruction as the original study pipeline.
-
-# Example analysis outline
-
-```{r}
-# Example: standardize the main analysis table to public-facing column names.
-# Replace the placeholder source column names below with the names used in your local tables.
-#
-# study_table <- standardize_study_table(
-#   raw_study_table,
-#   sample_id_col = "your_sample_identifier",
-#   infant_id_col = "your_infant_identifier",
-#   postnatal_age_col = "your_postnatal_age_column",
-#   gestational_age_col = "your_gestational_age_column",
-#   birth_weight_col = "your_birth_weight_column",
-#   sex_col = "your_sex_column",
-#   delivery_mode_col = "your_delivery_mode_column",
-#   additional_mapping = c(
-#     antibiotic_exposure_ratio_1w = "your_one_week_antibiotic_ratio_column",
-#     antibiotic_exposure_ratio_2w = "your_two_week_antibiotic_ratio_column"
-#   )
-# )
-#
-# Primary covariates used across adjusted models:
-# primary_covariates <- c(
-#   "delivery_mode",
-#   "gestational_age_weeks",
-#   "birth_weight_g",
-#   "sex",
-#   "multiple_gestation",
-#   "prenatal_antibiotics",
-#   "apgar_5min",
-#   "postnatal_age_days",
-#   "breastmilk_exposure_ratio_total",
-#   "formula_exposure_ratio_total",
-#   "antibiotic_exposure_ratio_total",
-#   "antifungal_exposure_ratio_total",
-#   "central_line_ratio_total",
-#   "invasive_ventilation_ratio_total",
-#   "probiotics_ratio_total",
-#   "ppi_ratio_total",
-#   "rbc_transfusion_ratio_total"
-# )
-#
-# Microbiome PERMANOVA:
-# microbiome_permanova <- run_permanova_summary(
-#   distance_matrix = microbiome_bray_distance,
-#   metadata = study_table,
-#   variables = primary_covariates
-# )
-#
-# Adjusted mixed-effects model for a single exposure:
-# antibiotic_model <- fit_adjusted_mixed_model(
-#   data = study_table,
-#   outcome = "microbial_load_log10",
-#   exposure = "antibiotic_exposure_ratio_total",
-#   covariates = setdiff(primary_covariates, "antibiotic_exposure_ratio_total"),
-#   subject_id_col = "infant_id",
-#   rescale_columns = c("postnatal_age_days", "antibiotic_exposure_ratio_total"),
-#   rescale_method = "minmax"
-# )
-#
-# Inter-omics network:
-# network_result <- build_metanet_interomics_network(
-#   microbiome_matrix = genus_abundance_matrix,
-#   metabolite_matrix = metabolite_matrix
-# )
-#
-# Conservative subject-level mediation sensitivity analysis:
-# mediation_result <- run_subject_level_mediation_sensitivity(
-#   data = study_table,
-#   exposure = "antibiotic_exposure_ratio_total",
-#   mediator = "clostridium_sensu_stricto_1_abundance",
-#   outcome = "fecal_calprotectin_log",
-#   covariates = c("postnatal_age_days"),
-#   subject_id_col = "infant_id",
-#   age_col = "postnatal_age_days",
-#   min_age_days = 14
-# )
+message("Primary public entrypoint: ", primary_entrypoint)
 ```

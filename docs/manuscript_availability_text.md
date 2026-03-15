@@ -4,6 +4,8 @@
 
 Code used for data analysis is publicly available at GitHub: [https://github.com/EHMCstudy/NICU-exposures-study](https://github.com/EHMCstudy/NICU-exposures-study).
 
+The repository includes a modular and manuscript-oriented representative workflow with a primary public entrypoint at `code/nicu_exposures_representative_workflow.Rmd`.
+
 ## Data Availability
 
 The 16S rRNA sequencing files are publicly available in the National Center for Biotechnology Information Sequence Read Archive under BioProject accession [PRJNA1163054](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1163054).
