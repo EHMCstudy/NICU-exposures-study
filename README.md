@@ -19,6 +19,11 @@ This repository was prepared by the study team to provide the public code locati
 ## Related public data
 
 - 16S rRNA sequencing data: [NCBI BioProject PRJNA1163054](https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1163054)
+- De-identified metadata extracts derived from Supplementary Tables S1 and S2:
+  - `data/metadata/table_s1_infant_summary.csv`
+  - `data/metadata/table_s1_infant_metadata.csv`
+  - `data/metadata/table_s2_sample_counts.csv`
+  - `data/metadata/table_s2_sample_metadata.csv`
 
 ## Citation
 
