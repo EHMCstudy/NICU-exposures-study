@@ -3,18 +3,12 @@ title: "FB_ABT_unload_final_2025.12"
 output: html_document
 date: "2025-12-06"
 ---
-# 无画图极简版
+# Minimal analysis workflow
 ```{r}
 # ==============================================================================
-# Project: NICU Exposures Reprogram Microbiome–Metabolome Trajectories
-# Script: Complete Analysis Pipeline (Data Cleaning -> Multi-omics)
-# Version: 1.0 (Submission Ready)
-# Description: This script contains the reproducible code for:
-#   1. Metadata processing and factorization
-#   2. Quantitative microbiome profiling (Visualization)
-#   3. Multivariate statistics (PERMANOVA & dbRDA)
-#   4. Linear Mixed-Effects Models (LMM) for longitudinal inference
-#   5. Multi-omics integration (Procrustes, WGCNA, Network, Mediation)
+# Study: NICU Exposures Reprogram Microbiome-Metabolome Trajectories
+# Scope: metadata processing, quantitative microbiome profiling,
+# multivariate modelling, and multi-omics association analyses
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -284,14 +278,12 @@ run_mediation_analysis <- function(data, x, m, y, covars) {
 # lmm_res <- run_lmm_batch(combined_data, c("Shannon", "qPCR_log"), vars_env)
 ```
 
-# 画图版
+# Figure-generating workflow
 ```{r}
 # ==============================================================================
-# Project: NICU Exposures Reprogram Microbiome–Metabolome Trajectories
-# Script: Complete Analysis Pipeline (Data Cleaning, Stats, & Visualization)
-# Version: 2.0 (Full Detailed Version)
-# Author: EHMCstudy team
-# Date: 2025-12-06
+# Study: NICU Exposures Reprogram Microbiome-Metabolome Trajectories
+# Scope: data cleaning, statistical analyses, and figure generation
+# Team: EHMCstudy
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -669,8 +661,6 @@ run_mediation_summary <- function(data, x, m, y, covars) {
   ))
 }
 
-# ==============================================================================
-# End of Analysis Pipeline
-# Please ensure input dataframes (FB_ABT_all, Family_table, etc.) are loaded.
-# ==============================================================================
+# End of analysis workflow.
+# Prepare required input objects before running the script.
 ```

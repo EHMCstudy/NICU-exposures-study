@@ -1,11 +1,5 @@
-# Metadata Release Area
+# Metadata Directory
 
-This directory is reserved for de-identified public metadata tables associated with the NICU exposures study.
+This directory is reserved for de-identified metadata if a public release is approved.
 
-Recommended contents for public release:
-
-- `sample_metadata_public.csv`
-- `data_dictionary.md`
-- optional accession crosswalk columns linking metadata rows to public SRA/BioSample accessions
-
-Do not upload protected, identifiable, or institution-restricted source data to this directory.
+Do not upload protected or identifiable source data here.
