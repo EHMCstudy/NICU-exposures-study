@@ -1,0 +1,10 @@
+.DS_Store
+.Rhistory
+.RData
+.Rproj.user/
+*.html
+*.Rout
+*.Rout.fail
+*.Rout.save
+*.log
+*.tmp
