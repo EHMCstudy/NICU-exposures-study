@@ -3,366 +3,40 @@ title: "FB_ABT_unload_final_2025.12"
 output: html_document
 date: "2025-12-06"
 ---
-# Minimal analysis workflow
-```{r}
-# ==============================================================================
-# Study: NICU Exposures Reprogram Microbiome-Metabolome Trajectories
-# Scope: metadata processing, quantitative microbiome profiling,
-# multivariate modelling, and multi-omics association analyses
-# ==============================================================================
 
+# Representative analysis workflow
+
+This public script provides a conservative, manuscript-matched workflow for the main analyses reported in:
+
+`Neonatal Intensive Care Unit Exposures Reprogram Microbiome-Metabolome Trajectories and Modulate Host Calprotectin in Preterm Infants: A Longitudinal Multi-omics Study`
+
+The aim of this release is clarity and methodological fidelity rather than full internal pipeline reproduction. Functions are written around standardized public-facing column names. Internal study tables can be mapped to these names before analysis.
+
+```{r}
 # ------------------------------------------------------------------------------
-# 0. Environment Setup
+# 0. Setup
 # ------------------------------------------------------------------------------
-if (!require("pacman")) install.packages("pacman")
+if (!requireNamespace("pacman", quietly = TRUE)) {
+  install.packages("pacman")
+}
+
 pacman::p_load(
-  tidyverse,    # Data manipulation & Plotting
-  vegan,        # Ecological statistics (PERMANOVA, dbRDA)
-  phyloseq,     # Microbiome data container
-  nlme,         # Linear Mixed-Effects Models
-  openxlsx,     # Excel export
-  parallel,     # Parallel computing
-  ggrepel,      # Plot labeling
-  patchwork,    # Plot assembly
-  WGCNA,        # Weighted Gene Co-expression Network Analysis
-  mediation     # Causal Mediation Analysis
+  dplyr,
+  tidyr,
+  ggplot2,
+  forcats,
+  vegan,
+  nlme,
+  openxlsx,
+  ggrepel,
+  pheatmap,
+  scales,
+  mediation
 )
 
-# Set global plotting theme for consistent publication quality
-theme_pub <- theme_classic() +
-  theme(
-    axis.text = element_text(color = "black", size = 10),
-    axis.title = element_text(color = "black", size = 11, face = "bold"),
-    legend.title = element_text(color = "black", face = "bold"),
-    legend.text = element_text(color = "black"),
-    strip.background = element_blank()
-  )
-
-# Define standardized color palette
-cols_family <- c("#E64B35FF", "#4DBBD5FF", "#00A087FF", "#3C5488FF", 
-                 "#F39B7FFF", "#8491B4FF", "#91D1C2FF", "grey70")
-
-# Set seed for reproducibility
 set.seed(123)
 
-# ------------------------------------------------------------------------------
-# 1. Metadata Cleaning & Preparation
-# ------------------------------------------------------------------------------
-# Function to standardize metadata structure and convert types
-clean_metadata_pipeline <- function(df, sample_id = "ID.seq", subject_id = "ID") {
-  stopifnot(sample_id %in% colnames(df), subject_id %in% colnames(df))
-
-  df %>%
-    distinct(.data[[sample_id]], .keep_all = TRUE) %>% 
-    mutate(
-      # Categorical Variables -> Factors (Critical for statistical models)
-      Gender = factor(Gender, levels = c("M", "F"), labels = c("Male", "Female")),
-      DeliveryMode = factor(DeliveryMode, levels = c("VD", "CS"), labels = c("Vaginal", "C-section")),
-      Ab_prenatal = factor(Ab_prenatal, levels = c("F", "T"), labels = c("No", "Yes")),
-      Twins = factor(Twins.T, levels = c("F", "T"), labels = c("Singleton", "Multiple")),
-      SGA = ifelse(SGA == "SGA", "Yes", "No"),
-      
-      # Numeric Handling
-      GA = as.numeric(GA),
-      BW = as.numeric(BW),
-      DOL = as.numeric(DOL),
-      
-      # Handle NAs in numeric exposures (replace NA with 0)
-      Breastmilk_days = replace_na(Breastmilk_days, 0),
-      Ab_days = replace_na(Ab_days, 0)
-    )
-}
-
-# Example application: FB_ABT_clean <- clean_metadata_pipeline(FB_ABT_all)
-
-# Define variable sets for downstream models
-vars_host <- c("GA", "BW", "Gender", "DeliveryMode", "Twins", "Apgar5", "DOL")
-vars_env  <- c("Breastmilk_days_coverage_total", "Formula_days_coverage_total",
-               "Ab_days_coverage_total", "Vent_Invasive_days_coverage_total",
-               "CentralLine_days_coverage_total", "Probiotics_days_coverage_total")
-
-# ------------------------------------------------------------------------------
-# 2. Visualization: Quantitative & Relative Profiling (Fig. 1)
-# ------------------------------------------------------------------------------
-plot_composition_bar <- function(data, meta, value_col, y_label, is_percent = FALSE) {
-  plot_data <- data %>%
-    left_join(select(meta, ID.seq, qPCR.adjust), by = "ID.seq") %>%
-    filter(!is.na(qPCR.adjust))
-  
-  p <- ggplot(plot_data, aes(x = fct_reorder(ID.seq, qPCR.adjust), y = .data[[value_col]], fill = Family)) +
-    geom_bar(stat = "identity", width = 1) +
-    scale_fill_manual(values = cols_family) +
-    labs(y = y_label, x = "Samples") +
-    theme_pub +
-    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
-  
-  if (is_percent) p <- p + scale_y_continuous(labels = scales::percent, expand = c(0,0))
-  else p <- p + scale_y_continuous(expand = c(0,0))
-  
-  return(p)
-}
-
-# Example Usage:
-# p1 <- plot_composition_bar(Family_table_relative, FB_ABT_clean, "Abundance", "Relative Abundance", TRUE)
-# p2 <- plot_composition_bar(Family_table_load, FB_ABT_clean, "Abundance", "Inferred Load", FALSE)
-# ggsave("Fig1_Profiles.pdf", p1 / p2, width = 6, height = 7)
-
-# ------------------------------------------------------------------------------
-# 3. Multivariate Statistics: PERMANOVA & dbRDA
-# ------------------------------------------------------------------------------
-# Function 3.1: Population-level PERMANOVA
-# Note: sample-level metadata are aligned to the distance matrix and numeric variables are scaled.
-run_population_permanova <- function(phylo_obj, meta, vars, out_name) {
-  
-  # Align Data
-  dist_mat <- phyloseq::distance(phylo_obj, "bray")
-  sample_ids <- labels(dist_mat)
-  meta_sub <- meta %>% 
-    filter(ID.seq %in% sample_ids) %>%
-    mutate(across(where(is.numeric), scale)) %>% # Z-score standardization
-    column_to_rownames("ID.seq")
-  meta_sub <- meta_sub[sample_ids, ] # Strict alignment
-  
-  # Run Model
-  f_string <- paste("dist_mat ~", paste(vars, collapse = " + "))
-  perm_res <- adonis2(as.formula(f_string), data = meta_sub, permutations = 2000, by = "margin")
-  
-  # Format Results
-  res_df <- as.data.frame(perm_res) %>%
-    rownames_to_column("Factor") %>%
-    filter(!Factor %in% c("Total", "Residual")) %>%
-    mutate(
-      P_adj = p.adjust(`Pr(>F)`, method = "fdr"),
-      Significance = ifelse(P_adj < 0.1, "*", "ns")
-    ) %>%
-    arrange(desc(R2))
-  
-  write_xlsx(res_df, paste0("Stats_PERMANOVA_", out_name, ".xlsx"))
-  return(res_df)
-}
-
-# Function 3.2: dbRDA with Collinearity Check
-run_dbrda <- function(otu_table, meta, vars, out_name) {
-  # Align Data
-  common_ids <- intersect(rownames(otu_table), meta$ID.seq)
-  otu_sub <- otu_table[common_ids, ]
-  meta_sub <- meta %>% filter(ID.seq %in% common_ids) %>% column_to_rownames("ID.seq")
-  
-  # Build Model & Check VIF
-  f_string <- paste("otu_sub ~", paste(vars, collapse = " + "))
-  mod <- capscale(as.formula(f_string), data = meta_sub, dist = "bray")
-  print(vif.cca(mod)) # Print VIF to console for inspection
-  
-  # Plotting
-  anova_res <- anova(mod, by = "margin", permutations = 2000)
-  anova_df <- anova_res %>%
-    as.data.frame() %>%
-    rownames_to_column("Var") %>%
-    filter(Var != "Residual") %>%
-    mutate(P_adj = p.adjust(`Pr(>F)`, method = "fdr"))
-  sig_vars <- anova_df$Var[anova_df$P_adj < 0.1]
-  
-  sc_sites <- scores(mod, display = "sites", choices = 1:2) %>% as.data.frame() %>% 
-    mutate(DOL = meta_sub$DOL)
-  sc_bp <- scores(mod, display = "bp", choices = 1:2) %>% as.data.frame() %>% 
-    rownames_to_column("Var") %>% filter(Var %in% sig_vars)
-  
-  p <- ggplot(sc_sites, aes(CAP1, CAP2)) +
-    geom_point(aes(fill = DOL), shape = 21, size = 2.5, alpha = 0.8) +
-    geom_segment(data = sc_bp, aes(x=0, y=0, xend=CAP1*1.5, yend=CAP2*1.5), arrow = arrow(length=unit(0.2,"cm"))) +
-    geom_text_repel(data = sc_bp, aes(x=CAP1*1.7, y=CAP2*1.7, label=Var)) +
-    scale_fill_viridis_c() + theme_pub + labs(title = out_name)
-  
-  ggsave(paste0("Fig_dbRDA_", out_name, ".pdf"), p, width = 6, height = 5)
-  return(mod)
-}
-
-# ------------------------------------------------------------------------------
-# 4. Longitudinal Inference: Linear Mixed-Effects Models (LMM)
-# ------------------------------------------------------------------------------
-# This handles repeated measures rigor.
-run_lmm_batch <- function(data, outcomes, fixed_vars) {
-  
-  # Scale numeric predictors for standardized betas
-  model_data <- data %>%
-    mutate(across(where(is.numeric) & !all_of(c("ID", "ID.seq", outcomes)), scale))
-  
-  results_list <- list()
-  
-  for (y in outcomes) {
-    tryCatch({
-      f <- as.formula(paste(y, "~", paste(fixed_vars, collapse = " + ")))
-      mod <- lme(f, random = ~ 1 | ID, data = model_data, na.action = na.omit)
-      
-      res <- as.data.frame(summary(mod)$tTable) %>%
-        rownames_to_column("Predictor") %>%
-        filter(Predictor != "(Intercept)") %>%
-        mutate(Outcome = y, P_Adj = p.adjust(`p-value`, method = "fdr"))
-      
-      results_list[[y]] <- res
-    }, error = function(e) message(paste("Skip:", y)))
-  }
-  
-  final_df <- bind_rows(results_list)
-  write_xlsx(final_df, "Stats_LMM_Results.xlsx")
-  return(final_df)
-}
-
-# ------------------------------------------------------------------------------
-# 5. Multi-omics Integration
-# ------------------------------------------------------------------------------
-# 5.1 Procrustes Analysis
-run_procrustes <- function(micro_dist, meta_matrix, map_df) {
-  valid_ids <- intersect(labels(micro_dist), map_df$ID.seq)
-  
-  # Subset and align
-  d_micro <- as.dist(as.matrix(micro_dist)[valid_ids, valid_ids])
-  d_meta <- vegdist(meta_matrix[valid_ids, ], method = "euclidean")
-  
-  pro_res <- protest(d_micro, d_meta, scores = "sites", permutations = 2000)
-  return(pro_res)
-}
-
-# 5.2 Network Construction Wrapper
-run_network_analysis <- function(micro_mat, meta_mat,
-                                 r_threshold = 0.3,
-                                 p_threshold = 0.01,
-                                 use_p_adj = TRUE,
-                                 delete_single = TRUE) {
-  if (!requireNamespace("MetaNet", quietly = TRUE)) {
-    stop("MetaNet package is required for network analysis.")
-  }
-
-  ids <- intersect(rownames(micro_mat), rownames(meta_mat))
-  micro_sub <- micro_mat[ids, , drop = FALSE]
-  meta_sub <- meta_mat[ids, , drop = FALSE]
-
-  net <- MetaNet::multi_net_build(
-    list(Microbiome = micro_sub, Metabolome = meta_sub),
-    r_threshold = r_threshold,
-    p_threshold = p_threshold,
-    use_p_adj = use_p_adj,
-    delete_single = delete_single
-  )
-
-  list(
-    Network = net,
-    EdgeTable = as.data.frame(MetaNet::get_e(net))
-  )
-}
-
-# 5.3 WGCNA Pipeline
-run_wgcna <- function(data_matrix, min_module_size = 30, merge_cor = 0.85) {
-  powers <- c(1:10, seq(12, 20, 2))
-  sft <- pickSoftThreshold(data_matrix, powerVector = powers, verbose = 0)
-  soft_power <- ifelse(is.na(sft$powerEstimate), 6, sft$powerEstimate)
-
-  net <- blockwiseModules(
-    data_matrix,
-    power = soft_power,
-    networkType = "signed hybrid",
-    TOMType = "signed",
-    minModuleSize = min_module_size,
-    mergeCutHeight = 1 - merge_cor,
-    numericLabels = TRUE,
-    verbose = 0
-  )
-
-  MEs <- moduleEigengenes(data_matrix, colors = net$colors)$eigengenes
-  return(list(MEs = MEs, Colors = net$colors))
-}
-
-# ------------------------------------------------------------------------------
-# 6. Mediation Analysis
-# ------------------------------------------------------------------------------
-# Path: Exposure (X) -> Microbiome (M) -> Immune Marker (Y)
-# For public release, mediation is implemented at the infant level after subject-level aggregation
-# to avoid pseudo-replication from repeated samples.
-run_mediation_analysis <- function(data, x, m, y, covars,
-                                   id_var = "ID",
-                                   age_var = NULL,
-                                   min_age = NULL,
-                                   sims = 1000) {
-  vars <- unique(c(id_var, x, m, y, covars, age_var))
-  data_sub <- data %>% select(all_of(vars))
-
-  if (!is.null(age_var) && !is.null(min_age)) {
-    data_sub <- data_sub %>% filter(.data[[age_var]] >= min_age)
-  }
-
-  data_subject <- data_sub %>%
-    group_by(.data[[id_var]]) %>%
-    summarise(
-      across(
-        -all_of(id_var),
-        ~ if (is.numeric(.x)) median(.x, na.rm = TRUE) else {
-          vals <- .x[!is.na(.x)]
-          if (length(vals) == 0) NA else vals[[1]]
-        }
-      ),
-      .groups = "drop"
-    ) %>%
-    tidyr::drop_na(all_of(c(x, m, y, covars)))
-
-  f_m <- as.formula(paste(m, "~", x, "+", paste(covars, collapse = "+")))
-  f_y <- as.formula(paste(y, "~", x, "+", m, "+", paste(covars, collapse = "+")))
-
-  model_m <- lm(f_m, data = data_subject)
-  model_y <- lm(f_y, data = data_subject)
-
-  med_res <- mediate(model_m, model_y, treat = x, mediator = m, boot = TRUE, sims = sims)
-
-  data.frame(
-    n_subjects = nrow(data_subject),
-    ACME = med_res$d0,
-    ADE = med_res$z0,
-    Total_Effect = med_res$tau.coef,
-    Prop_Mediated = med_res$n0,
-    P_ACME = med_res$d0.p
-  )
-}
-
-# ==============================================================================
-# Execution Example (Commented out for upload)
-# ==============================================================================
-# FB_ABT_clean <- clean_metadata_pipeline(raw_metadata)
-# perm_res <- run_population_permanova(phylo_obj, FB_ABT_clean, c(vars_host, vars_env), "Main")
-# lmm_res <- run_lmm_batch(combined_data, c("Shannon", "qPCR_log"), vars_env)
-```
-
-# Figure-generating workflow
-```{r}
-# ==============================================================================
-# Study: NICU Exposures Reprogram Microbiome-Metabolome Trajectories
-# Scope: data cleaning, statistical analyses, and figure generation
-# Team: EHMCstudy
-# ==============================================================================
-
-# ------------------------------------------------------------------------------
-# 0. Environment & Dependencies
-# ------------------------------------------------------------------------------
-if (!require("pacman")) install.packages("pacman")
-pacman::p_load(
-  tidyverse,    # Data manipulation & ggplot2
-  vegan,        # Ecological statistics (PERMANOVA, dbRDA)
-  phyloseq,     # Microbiome data structure
-  nlme,         # Linear Mixed-Effects Models (LMM)
-  openxlsx,     # Excel export
-  parallel,     # Parallel computing
-  ggrepel,      # Non-overlapping text labels
-  patchwork,    # Plot assembly
-  pheatmap,     # Heatmaps
-  RColorBrewer, # Color palettes
-  scales,       # Axis formatting
-  WGCNA,        # Metabolite clustering
-  mediation     # Causal mediation
-)
-
-# ------------------------------------------------------------------------------
-# 1. Global Themes & Palettes
-# ------------------------------------------------------------------------------
-# Set a publication-ready theme
-theme_pub <- theme_classic() +
+theme_publication <- theme_classic() +
   theme(
     axis.text = element_text(color = "black", size = 10),
     axis.title = element_text(color = "black", size = 11, face = "bold"),
@@ -372,373 +46,660 @@ theme_pub <- theme_classic() +
     plot.title = element_text(hjust = 0.5, face = "bold")
   )
 
-# Defined Color Palettes (Based on Manuscript)
-cols_family <- c(
-  "Enterobacteriaceae" = "#C0392B", 
+family_palette <- c(
+  "Enterobacteriaceae" = "#C0392B",
   "Enterococcaceae" = "#A04000",
-  "Staphylococcaceae" = "#F1C40F", 
+  "Staphylococcaceae" = "#F1C40F",
   "Clostridiaceae" = "#E67E22",
-  "Bifidobacteriaceae" = "#8E44AD", 
+  "Bifidobacteriaceae" = "#8E44AD",
   "Veillonellaceae" = "#2C3E50",
-  "Streptococcaceae" = "#E74C3C", 
-  "Diversified" = "#27AE60",
-  "Others" = "grey80"
+  "Streptococcaceae" = "#E74C3C",
+  "Other" = "grey80"
 )
 
-cols_group <- c("Breastmilk" = "#2E86C1", "Antibiotics" = "#C0392B")
-
 # ------------------------------------------------------------------------------
-# 2. Metadata Cleaning & Feature Engineering
+# 1. Data standardization
 # ------------------------------------------------------------------------------
-clean_metadata_pipeline <- function(df, sample_id = "ID.seq", subject_id = "ID") {
-  stopifnot(sample_id %in% colnames(df), subject_id %in% colnames(df))
+rename_present <- function(data, mapping) {
+  mapping <- mapping[!is.na(mapping)]
+  present_mapping <- mapping[unname(mapping) %in% colnames(data)]
 
-  df %>%
-    distinct(.data[[sample_id]], .keep_all = TRUE) %>% 
-    mutate(
-      # Factorize Categorical Variables
-      Gender = factor(Gender, levels = c("M", "F"), labels = c("Male", "Female")),
-      DeliveryMode = factor(DeliveryMode, levels = c("VD", "CS"), labels = c("Vaginal", "C-section")),
-      Ab_prenatal = factor(Ab_prenatal, levels = c("F", "T"), labels = c("No", "Yes")),
-      Twins = factor(Twins.T, levels = c("F", "T"), labels = c("Singleton", "Multiple")),
-      
-      # Numeric Conversions
-      GA = as.numeric(GA),
-      BW = as.numeric(BW),
-      DOL = as.numeric(DOL),
-      
-      # Handle NAs
-      Breastmilk_days = replace_na(Breastmilk_days, 0),
-      Ab_days = replace_na(Ab_days, 0),
-      
-      # Feature Engineering: sAUR (Sample Antibiotic Use Rate)
-      sAUR = Ab_days / DOL,
-      sAUR_Group = case_when(
-        sAUR <= 0.1 ~ "Low",
-        sAUR > 0.1 & sAUR < 0.5 ~ "Medium",
-        sAUR >= 0.5 ~ "High"
-      )
-    )
+  if (length(present_mapping) == 0) {
+    return(data)
+  }
+
+  dplyr::rename(
+    data,
+    !!!rlang::set_names(rlang::syms(unname(present_mapping)), names(present_mapping))
+  )
 }
 
-# Example application: FB_ABT_clean <- clean_metadata_pipeline(raw_metadata)
+first_non_missing <- function(x) {
+  values <- x[!is.na(x)]
+  if (length(values) == 0) {
+    return(NA)
+  }
+  values[[1]]
+}
 
-# Define Variable Sets
-vars_host <- c("GA", "BW", "Gender", "DeliveryMode", "Twins", "Apgar5", "DOL")
-vars_treat <- c("Breastmilk_days_coverage_total", "Formula_days_coverage_total",
-                "Ab_days_coverage_total", "Vent_Invasive_days_coverage_total",
-                "CentralLine_days_coverage_total", "Probiotics_days_coverage_total")
+recode_binary_flag <- function(x) {
+  dplyr::case_when(
+    x %in% c("T", "Yes", "YES", "True", "true", 1) ~ "Yes",
+    x %in% c("F", "No", "NO", "False", "false", 0) ~ "No",
+    TRUE ~ as.character(x)
+  )
+}
 
-# ------------------------------------------------------------------------------
-# 3. Figure 1: Quantitative Microbiome Profiling
-# ------------------------------------------------------------------------------
+recode_delivery_mode <- function(x) {
+  dplyr::case_when(
+    x %in% c("VD", "Vaginal") ~ "Vaginal",
+    x %in% c("CS", "C-section", "Cesarean") ~ "C-section",
+    TRUE ~ as.character(x)
+  )
+}
 
-# 3.1 Stacked Barplot (Relative vs Absolute)
-plot_stacked_bar <- function(data_long, y_col, y_label, is_percent=FALSE) {
-  # Add labels to the data for sorting
-  p <- ggplot(data_long, aes(x = fct_reorder(ID.seq, qPCR.adjust), y = .data[[y_col]], fill = Family)) +
-    geom_bar(stat = "identity", width = 1) +
-    scale_fill_manual(values = cols_family) +
-    labs(y = y_label, x = "Samples (Ordered by Load)") +
-    theme_pub +
-    theme(
-      axis.text.x = element_blank(),
-      axis.ticks.x = element_blank(),
-      legend.position = "bottom"
-    )
-  
-  if(is_percent) {
-    p <- p + scale_y_continuous(labels = scales::percent, expand = c(0,0))
+recode_sex <- function(x) {
+  dplyr::case_when(
+    x %in% c("M", "Male") ~ "Male",
+    x %in% c("F", "Female") ~ "Female",
+    TRUE ~ as.character(x)
+  )
+}
+
+standardize_study_table <- function(
+  data,
+  sample_id_col = "sample_id",
+  infant_id_col = "infant_id",
+  postnatal_age_col = "postnatal_age_days",
+  gestational_age_col = "gestational_age_weeks",
+  birth_weight_col = "birth_weight_g",
+  sex_col = "sex",
+  delivery_mode_col = "delivery_mode",
+  multiple_gestation_col = "multiple_gestation",
+  prenatal_antibiotic_col = "prenatal_antibiotics",
+  apgar5_col = "apgar_5min",
+  breastmilk_ratio_total_col = "breastmilk_exposure_ratio_total",
+  formula_ratio_total_col = "formula_exposure_ratio_total",
+  antibiotic_ratio_total_col = "antibiotic_exposure_ratio_total",
+  antifungal_ratio_total_col = "antifungal_exposure_ratio_total",
+  invasive_ventilation_ratio_total_col = "invasive_ventilation_ratio_total",
+  central_line_ratio_total_col = "central_line_ratio_total",
+  probiotics_ratio_total_col = "probiotics_ratio_total",
+  ppi_ratio_total_col = "ppi_ratio_total",
+  rbc_transfusion_ratio_total_col = "rbc_transfusion_ratio_total",
+  microbial_load_log_col = "microbial_load_log10",
+  calprotectin_log_col = "fecal_calprotectin_log",
+  additional_mapping = NULL
+) {
+  base_mapping <- c(
+    sample_id = sample_id_col,
+    infant_id = infant_id_col,
+    postnatal_age_days = postnatal_age_col,
+    gestational_age_weeks = gestational_age_col,
+    birth_weight_g = birth_weight_col,
+    sex = sex_col,
+    delivery_mode = delivery_mode_col,
+    multiple_gestation = multiple_gestation_col,
+    prenatal_antibiotics = prenatal_antibiotic_col,
+    apgar_5min = apgar5_col,
+    breastmilk_exposure_ratio_total = breastmilk_ratio_total_col,
+    formula_exposure_ratio_total = formula_ratio_total_col,
+    antibiotic_exposure_ratio_total = antibiotic_ratio_total_col,
+    antifungal_exposure_ratio_total = antifungal_ratio_total_col,
+    invasive_ventilation_ratio_total = invasive_ventilation_ratio_total_col,
+    central_line_ratio_total = central_line_ratio_total_col,
+    probiotics_ratio_total = probiotics_ratio_total_col,
+    ppi_ratio_total = ppi_ratio_total_col,
+    rbc_transfusion_ratio_total = rbc_transfusion_ratio_total_col,
+    microbial_load_log10 = microbial_load_log_col,
+    fecal_calprotectin_log = calprotectin_log_col
+  )
+
+  if (!is.null(additional_mapping)) {
+    base_mapping <- c(base_mapping, additional_mapping)
+  }
+
+  data_standardized <- data %>%
+    rename_present(base_mapping)
+
+  stopifnot("sample_id" %in% colnames(data_standardized))
+  stopifnot("infant_id" %in% colnames(data_standardized))
+
+  data_standardized <- data_standardized %>%
+    distinct(sample_id, .keep_all = TRUE)
+
+  if ("sex" %in% colnames(data_standardized)) {
+    data_standardized <- data_standardized %>%
+      mutate(sex = factor(recode_sex(sex), levels = c("Male", "Female")))
+  }
+
+  if ("delivery_mode" %in% colnames(data_standardized)) {
+    data_standardized <- data_standardized %>%
+      mutate(delivery_mode = factor(recode_delivery_mode(delivery_mode), levels = c("Vaginal", "C-section")))
+  }
+
+  if ("prenatal_antibiotics" %in% colnames(data_standardized)) {
+    data_standardized <- data_standardized %>%
+      mutate(prenatal_antibiotics = factor(recode_binary_flag(prenatal_antibiotics), levels = c("No", "Yes")))
+  }
+
+  if ("multiple_gestation" %in% colnames(data_standardized)) {
+    data_standardized <- data_standardized %>%
+      mutate(multiple_gestation = factor(recode_binary_flag(multiple_gestation), levels = c("No", "Yes")))
+  }
+
+  numeric_columns <- intersect(
+    c(
+      "postnatal_age_days",
+      "gestational_age_weeks",
+      "birth_weight_g",
+      "apgar_5min",
+      "breastmilk_exposure_ratio_total",
+      "formula_exposure_ratio_total",
+      "antibiotic_exposure_ratio_total",
+      "antifungal_exposure_ratio_total",
+      "invasive_ventilation_ratio_total",
+      "central_line_ratio_total",
+      "probiotics_ratio_total",
+      "ppi_ratio_total",
+      "rbc_transfusion_ratio_total",
+      "microbial_load_log10",
+      "fecal_calprotectin_log"
+    ),
+    colnames(data_standardized)
+  )
+
+  data_standardized %>%
+    mutate(across(all_of(numeric_columns), as.numeric))
+}
+
+rescale_numeric_columns <- function(data, columns, method = c("none", "zscore", "minmax")) {
+  method <- match.arg(method)
+  columns <- intersect(columns, colnames(data))
+
+  if (length(columns) == 0 || method == "none") {
+    return(data)
+  }
+
+  if (method == "zscore") {
+    data %>%
+      mutate(across(all_of(columns), ~ as.numeric(scale(.x))))
   } else {
-    p <- p + scale_y_continuous(expand = c(0,0))
-  }
-  return(p)
-}
-
-# 3.2 Longitudinal Trajectories (LOESS Smoothing)
-plot_longitudinal_loess <- function(data, y_col, group_col = NULL, y_label) {
-  p <- ggplot(data, aes(x = DOL, y = .data[[y_col]]))
-  
-  if (!is.null(group_col)) {
-    p <- p + geom_smooth(aes(color = .data[[group_col]], fill = .data[[group_col]]), 
-                         alpha = 0.2, method = "loess") +
-      scale_color_brewer(palette = "Set1") +
-      scale_fill_brewer(palette = "Set1")
-  } else {
-    p <- p + geom_smooth(color = "black", fill = "grey50", alpha = 0.3, method = "loess")
-  }
-  
-  p <- p + 
-    scale_x_continuous(limits = c(0, 80)) +
-    labs(x = "Days of Life", y = y_label) +
-    theme_pub
-  
-  # Log scale for quantitative data usually looks better
-  if (grepl("Absolute", y_label) || grepl("Load", y_label)) {
-    p <- p + scale_y_log10(labels = trans_format("log10", math_format(10^.x)))
-  }
-  
-  return(p)
-}
-
-# --- Execution Example ---
-# p1 <- plot_stacked_bar(long_rel_data, "Abundance", "Relative Abundance", TRUE)
-# p2 <- plot_stacked_bar(long_abs_data, "Abundance", "Inferred Load", FALSE)
-# p3 <- plot_longitudinal_loess(FB_ABT_clean, "qPCR.adjust", NULL, "Total Bacterial Load")
-# ggsave("Fig1_Overview.pdf", (p1/p2) | p3, width = 10, height = 6)
-
-
-# ------------------------------------------------------------------------------
-# 4. Figure 2 & 3: Multivariate Analysis (PERMANOVA & dbRDA)
-# ------------------------------------------------------------------------------
-
-# 4.1 Population-Level PERMANOVA (Barplot Visualization)
-run_permanova_plot <- function(phylo_obj, meta, vars, title) {
-  # Align and Scale Data
-  dist_mat <- phyloseq::distance(phylo_obj, "bray")
-  meta_sub <- meta %>% 
-    filter(ID.seq %in% labels(dist_mat)) %>%
-    mutate(across(where(is.numeric), scale)) %>% # Z-score scaling
-    column_to_rownames("ID.seq")
-  meta_sub <- meta_sub[labels(dist_mat), ]
-  
-  # Run adonis2 (Population level, no strata due to sparsity)
-  f <- as.formula(paste("dist_mat ~", paste(vars, collapse = "+")))
-  set.seed(123)
-  perm_res <- adonis2(f, data = meta_sub, permutations = 2000, by = "margin")
-  
-  # Prepare Plot Data
-  plot_df <- as.data.frame(perm_res) %>%
-    rownames_to_column("Variable") %>%
-    filter(!Variable %in% c("Total", "Residual")) %>%
-    mutate(
-      P_adj = p.adjust(`Pr(>F)`, method = "fdr"),
-      Significance = ifelse(P_adj < 0.1, "Significant", "NS"),
-      R2_Percent = R2
-    ) %>%
-    arrange(desc(R2))
-  
-  # Plot
-  p <- ggplot(plot_df, aes(x = fct_reorder(Variable, R2), y = R2, fill = Significance)) +
-    geom_bar(stat = "identity", alpha = 0.8) +
-    coord_flip() +
-    scale_fill_manual(values = c("Significant" = "#E74C3C", "NS" = "grey")) +
-    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
-    labs(x = NULL, y = "Variance Explained (R2)", title = title) +
-    theme_pub
-  
-  return(list(Table = perm_res, Plot = p))
-}
-
-# 4.2 dbRDA Biplot with Custom Arrows
-run_dbrda_biplot <- function(otu_table, meta, vars, title) {
-  # Data Alignment
-  ids <- intersect(rownames(otu_table), meta$ID.seq)
-  otu_sub <- otu_table[ids, ]
-  meta_sub <- meta %>% filter(ID.seq %in% ids) %>% column_to_rownames("ID.seq")
-  
-  # Model
-  f <- as.formula(paste("otu_sub ~", paste(vars, collapse = "+")))
-  mod <- capscale(f, data = meta_sub, dist = "bray")
-  
-  # Significance for arrows
-  anova_res <- anova(mod, by="margin", permutations=2000)
-  anova_df <- anova_res %>%
-    as.data.frame() %>%
-    rownames_to_column("Var") %>%
-    filter(Var != "Residual") %>%
-    mutate(P_adj = p.adjust(`Pr(>F)`, method = "fdr"))
-  sig_vars <- anova_df$Var[anova_df$P_adj < 0.1]
-  
-  # Extract Scores
-  sites <- scores(mod, display="sites", choices=1:2) %>% as.data.frame() %>% 
-    mutate(Shannon = meta_sub$Shannon, DOL = meta_sub$DOL)
-  arrows <- scores(mod, display="bp", choices=1:2) %>% as.data.frame() %>% 
-    rownames_to_column("Var") %>% filter(Var %in% sig_vars)
-  
-  # Plot
-  p <- ggplot() +
-    geom_point(data = sites, aes(x = CAP1, y = CAP2, fill = Shannon), 
-               shape = 21, size = 2.5, alpha = 0.7, stroke = 0.2) +
-    geom_segment(data = arrows, aes(x = 0, y = 0, xend = CAP1*1.5, yend = CAP2*1.5), 
-                 arrow = arrow(length = unit(0.2, "cm")), color = "black") +
-    geom_text_repel(data = arrows, aes(x = CAP1*1.7, y = CAP2*1.7, label = Var), 
-                    size = 3.5, fontface = "bold") +
-    scale_fill_viridis_c(option = "magma") +
-    labs(x = "dbRDA1", y = "dbRDA2", title = title) +
-    theme_pub
-  
-  return(p)
-}
-
-# ------------------------------------------------------------------------------
-# 5. Figure 2F & 3D: Linear Mixed-Effects Models (Heatmaps)
-# ------------------------------------------------------------------------------
-
-# 5.1 Batch LMM Runner
-run_lmm_heatmap_data <- function(data, taxa_list, factor, covariates = NULL, id_var = "ID") {
-  res_list <- list()
-
-  for (taxon in taxa_list) {
-    tryCatch({
-      rhs <- c(factor, covariates)
-      f <- as.formula(paste(taxon, "~", paste(rhs, collapse = " + ")))
-      model_data <- data %>% filter(!is.na(.data[[taxon]]))
-      mod <- lme(f, random = as.formula(paste("~1|", id_var)), data = model_data, na.action = na.omit)
-
-      results <- as.data.frame(summary(mod)$tTable) %>%
-        rownames_to_column("Variable") %>%
-        filter(Variable == factor)
-
-      if (nrow(results) > 0) {
-        res_list[[taxon]] <- data.frame(
-          Taxon = taxon,
-          Variable = factor,
-          Beta = results$Value,
-          P_val = results$`p-value`
+    data %>%
+      mutate(
+        across(
+          all_of(columns),
+          ~ (.x - min(.x, na.rm = TRUE)) / (max(.x, na.rm = TRUE) - min(.x, na.rm = TRUE))
         )
-      }
-    }, error = function(e) NULL)
+      )
+  }
+}
+
+available_columns <- function(data, columns) {
+  intersect(columns, colnames(data))
+}
+
+# ------------------------------------------------------------------------------
+# 2. Core visualization helpers
+# ------------------------------------------------------------------------------
+plot_ordered_composition_bar <- function(data_long, abundance_col, family_col = "Family") {
+  ggplot(
+    data_long,
+    aes(
+      x = fct_reorder(sample_id, microbial_load_log10),
+      y = .data[[abundance_col]],
+      fill = .data[[family_col]]
+    )
+  ) +
+    geom_col(width = 1) +
+    scale_fill_manual(values = family_palette) +
+    labs(x = "Samples", y = abundance_col) +
+    theme_publication +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+}
+
+plot_effect_size_forest <- function(results_table, label_col = "Variable", effect_col = "Effect",
+                                    ci_low_col = "CI_low", ci_high_col = "CI_high",
+                                    y_label = "Normalized effect size") {
+  ggplot(results_table, aes(x = forcats::fct_reorder(.data[[label_col]], .data[[effect_col]]),
+                            y = .data[[effect_col]])) +
+    geom_point(size = 2) +
+    geom_errorbar(aes(ymin = .data[[ci_low_col]], ymax = .data[[ci_high_col]]), width = 0.2) +
+    coord_flip() +
+    geom_hline(yintercept = 0, color = "red4", linetype = "dashed", alpha = 0.7) +
+    labs(x = NULL, y = y_label) +
+    theme_publication
+}
+
+# ------------------------------------------------------------------------------
+# 3. PERMANOVA and dbRDA
+# ------------------------------------------------------------------------------
+as_distance_matrix <- function(x, method) {
+  if (inherits(x, "dist")) {
+    return(x)
+  }
+  vegan::vegdist(as.matrix(x), method = method)
+}
+
+align_metadata_to_distance <- function(distance_matrix, metadata, sample_id_col = "sample_id") {
+  sample_ids <- labels(distance_matrix)
+  metadata %>%
+    filter(.data[[sample_id_col]] %in% sample_ids) %>%
+    tibble::column_to_rownames(sample_id_col) %>%
+    .[sample_ids, , drop = FALSE]
+}
+
+run_permanova_summary <- function(distance_matrix, metadata, variables,
+                                  sample_id_col = "sample_id",
+                                  permutations = 2000,
+                                  p_adjust_method = "fdr") {
+  distance_matrix <- as_distance_matrix(distance_matrix, method = "bray")
+  metadata_aligned <- align_metadata_to_distance(distance_matrix, metadata, sample_id_col = sample_id_col)
+
+  model_variables <- available_columns(metadata_aligned, variables)
+  stopifnot(length(model_variables) > 0)
+
+  formula_text <- paste("distance_matrix ~", paste(model_variables, collapse = " + "))
+  permanova_result <- adonis2(
+    as.formula(formula_text),
+    data = metadata_aligned,
+    permutations = permutations,
+    by = "margin"
+  )
+
+  as.data.frame(permanova_result) %>%
+    tibble::rownames_to_column("Variable") %>%
+    filter(!Variable %in% c("Total", "Residual")) %>%
+    mutate(P_adj = p.adjust(`Pr(>F)`, method = p_adjust_method)) %>%
+    arrange(desc(R2))
+}
+
+run_dbrda_summary <- function(feature_matrix, metadata, variables,
+                              sample_id_col = "sample_id",
+                              distance_method = "bray",
+                              permutations = 2000,
+                              p_adjust_method = "fdr") {
+  feature_matrix <- as.data.frame(feature_matrix)
+  metadata_aligned <- metadata %>%
+    filter(.data[[sample_id_col]] %in% rownames(feature_matrix)) %>%
+    tibble::column_to_rownames(sample_id_col)
+  metadata_aligned <- metadata_aligned[rownames(feature_matrix), , drop = FALSE]
+
+  model_variables <- available_columns(metadata_aligned, variables)
+  stopifnot(length(model_variables) > 0)
+
+  formula_text <- paste("feature_matrix ~", paste(model_variables, collapse = " + "))
+  dbrda_model <- capscale(as.formula(formula_text), data = metadata_aligned, dist = distance_method)
+
+  anova_table <- anova(dbrda_model, by = "margin", permutations = permutations) %>%
+    as.data.frame() %>%
+    tibble::rownames_to_column("Variable") %>%
+    filter(Variable != "Residual") %>%
+    mutate(P_adj = p.adjust(`Pr(>F)`, method = p_adjust_method))
+
+  list(
+    model = dbrda_model,
+    anova_table = anova_table,
+    sites = as.data.frame(scores(dbrda_model, display = "sites", choices = 1:2)) %>%
+      tibble::rownames_to_column("sample_id"),
+    vectors = as.data.frame(scores(dbrda_model, display = "bp", choices = 1:2)) %>%
+      tibble::rownames_to_column("Variable")
+  )
+}
+
+plot_dbrda_biplot <- function(dbrda_result, metadata,
+                              fill_col = "postnatal_age_days",
+                              arrow_multiplier = 3) {
+  significant_vectors <- dbrda_result$vectors %>%
+    left_join(dbrda_result$anova_table %>% select(Variable, P_adj), by = "Variable") %>%
+    filter(P_adj < 0.1)
+
+  site_table <- dbrda_result$sites %>%
+    left_join(metadata, by = "sample_id")
+
+  ggplot() +
+    geom_point(
+      data = site_table,
+      aes(x = CAP1, y = CAP2, fill = .data[[fill_col]]),
+      shape = 21,
+      size = 2.5,
+      alpha = 0.8
+    ) +
+    geom_segment(
+      data = significant_vectors,
+      aes(x = 0, y = 0, xend = CAP1 * arrow_multiplier, yend = CAP2 * arrow_multiplier),
+      arrow = arrow(length = unit(0.2, "cm")),
+      color = "black"
+    ) +
+    geom_text_repel(
+      data = significant_vectors,
+      aes(x = CAP1 * arrow_multiplier * 1.1, y = CAP2 * arrow_multiplier * 1.1, label = Variable),
+      size = 3
+    ) +
+    scale_fill_gradient(low = "grey85", high = "#2C7FB8") +
+    labs(x = "dbRDA1", y = "dbRDA2") +
+    theme_publication
+}
+
+# ------------------------------------------------------------------------------
+# 4. Mixed-effects models
+# ------------------------------------------------------------------------------
+fit_adjusted_mixed_model <- function(data, outcome, exposure, covariates = NULL,
+                                     subject_id_col = "infant_id",
+                                     rescale_columns = NULL,
+                                     rescale_method = c("none", "minmax", "zscore")) {
+  model_columns <- unique(c(subject_id_col, outcome, exposure, covariates))
+  model_columns <- available_columns(data, model_columns)
+  model_data <- data %>%
+    select(all_of(model_columns)) %>%
+    tidyr::drop_na(all_of(c(outcome, exposure, subject_id_col)))
+
+  rescale_targets <- if (is.null(rescale_columns)) character(0) else rescale_columns
+  model_data <- rescale_numeric_columns(
+    model_data,
+    columns = intersect(rescale_targets, colnames(model_data)),
+    method = match.arg(rescale_method)
+  )
+
+  rhs_terms <- c(exposure, available_columns(model_data, covariates))
+  model_formula <- as.formula(paste(outcome, "~", paste(rhs_terms, collapse = " + ")))
+
+  nlme::lme(
+    fixed = model_formula,
+    random = as.formula(paste("~1|", subject_id_col)),
+    data = model_data,
+    na.action = na.omit
+  )
+}
+
+extract_model_results <- function(model_object) {
+  as.data.frame(summary(model_object)$tTable) %>%
+    tibble::rownames_to_column("Variable") %>%
+    rename(
+      Effect = Value,
+      Standard_Error = Std.Error,
+      Degrees_of_Freedom = DF,
+      T_value = `t-value`,
+      P_value = `p-value`
+    ) %>%
+    mutate(
+      CI_low = Effect - 1.96 * Standard_Error,
+      CI_high = Effect + 1.96 * Standard_Error
+    )
+}
+
+run_heatmap_models <- function(data, outcomes, focal_exposure, covariates = NULL,
+                               subject_id_col = "infant_id",
+                               rescale_columns = NULL,
+                               rescale_method = c("none", "minmax", "zscore")) {
+  results <- lapply(outcomes, function(outcome_name) {
+    fitted_model <- fit_adjusted_mixed_model(
+      data = data,
+      outcome = outcome_name,
+      exposure = focal_exposure,
+      covariates = covariates,
+      subject_id_col = subject_id_col,
+      rescale_columns = rescale_columns,
+      rescale_method = match.arg(rescale_method)
+    )
+
+    extract_model_results(fitted_model) %>%
+      filter(Variable == focal_exposure) %>%
+      transmute(
+        Outcome = outcome_name,
+        Exposure = focal_exposure,
+        Effect,
+        P_value,
+        CI_low,
+        CI_high
+      )
+  })
+
+  bind_rows(results)
+}
+
+plot_model_heatmap <- function(results_table, value_col = "Effect") {
+  heatmap_matrix <- results_table %>%
+    select(Outcome, Exposure, .data[[value_col]]) %>%
+    pivot_wider(names_from = Exposure, values_from = .data[[value_col]]) %>%
+    tibble::column_to_rownames("Outcome") %>%
+    as.matrix()
+
+  pheatmap::pheatmap(
+    heatmap_matrix,
+    color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+    cluster_rows = FALSE,
+    cluster_cols = FALSE,
+    border_color = "grey90"
+  )
+}
+
+# ------------------------------------------------------------------------------
+# 5. Procrustes and network analysis
+# ------------------------------------------------------------------------------
+run_procrustes_summary <- function(microbiome_distance, metabolite_distance,
+                                   permutations = 2000) {
+  microbiome_distance <- as_distance_matrix(microbiome_distance, method = "bray")
+  metabolite_distance <- as_distance_matrix(metabolite_distance, method = "euclidean")
+
+  shared_ids <- intersect(labels(microbiome_distance), labels(metabolite_distance))
+  microbiome_distance <- as.dist(as.matrix(microbiome_distance)[shared_ids, shared_ids])
+  metabolite_distance <- as.dist(as.matrix(metabolite_distance)[shared_ids, shared_ids])
+
+  protest_result <- protest(
+    microbiome_distance,
+    metabolite_distance,
+    scores = "sites",
+    permutations = permutations
+  )
+
+  list(
+    test = protest_result,
+    plot_table = data.frame(
+      sample_id = shared_ids,
+      microbiome_axis1 = protest_result$X[, 1],
+      microbiome_axis2 = protest_result$X[, 2],
+      metabolite_axis1 = protest_result$Yrot[, 1],
+      metabolite_axis2 = protest_result$Yrot[, 2]
+    )
+  )
+}
+
+plot_procrustes_summary <- function(procrustes_result) {
+  ggplot(procrustes_result$plot_table) +
+    geom_segment(
+      aes(
+        x = microbiome_axis1,
+        y = microbiome_axis2,
+        xend = metabolite_axis1,
+        yend = metabolite_axis2
+      ),
+      color = "grey80",
+      alpha = 0.5
+    ) +
+    geom_point(aes(x = microbiome_axis1, y = microbiome_axis2), color = "#E64B35FF", size = 2) +
+    geom_point(aes(x = metabolite_axis1, y = metabolite_axis2), color = "#4DBBD5FF", size = 2) +
+    annotate(
+      "text",
+      x = min(procrustes_result$plot_table$microbiome_axis1),
+      y = max(procrustes_result$plot_table$microbiome_axis2),
+      label = paste0(
+        "Procrustes t0 = ",
+        round(procrustes_result$test$t0, 3),
+        "\nP = ",
+        procrustes_result$test$signif
+      )
+    ) +
+    labs(x = "Axis 1", y = "Axis 2") +
+    theme_publication
+}
+
+build_metanet_interomics_network <- function(microbiome_matrix, metabolite_matrix,
+                                             r_threshold = 0.3,
+                                             p_threshold = 0.01,
+                                             use_p_adj = TRUE,
+                                             delete_single = TRUE) {
+  if (!requireNamespace("MetaNet", quietly = TRUE)) {
+    stop("MetaNet package is required for network analysis.")
   }
 
-  bind_rows(res_list)
-}
+  shared_ids <- intersect(rownames(microbiome_matrix), rownames(metabolite_matrix))
+  microbiome_matrix <- as.data.frame(microbiome_matrix[shared_ids, , drop = FALSE])
+  metabolite_matrix <- as.data.frame(metabolite_matrix[shared_ids, , drop = FALSE])
 
-# 5.2 Plot Heatmap using pheatmap
-plot_lmm_heatmap <- function(lmm_res) {
-  # Prepare Matrix: Beta
-  mat_beta <- lmm_res %>% 
-    select(Taxon, Variable, Beta) %>% 
-    pivot_wider(names_from = Variable, values_from = Beta) %>% 
-    column_to_rownames("Taxon") %>% 
-    as.matrix()
-  
-  # Prepare Matrix: Significance (*)
-  mat_sig <- lmm_res %>% 
-    mutate(Sig = case_when(
-      P_val < 0.001 ~ "***",
-      P_val < 0.01 ~ "**",
-      P_val < 0.05 ~ "*",
-      TRUE ~ ""
-    )) %>% 
-    select(Taxon, Variable, Sig) %>% 
-    pivot_wider(names_from = Variable, values_from = Sig) %>% 
-    column_to_rownames("Taxon") %>% 
-    as.matrix()
-  
-  # Plot
-  pheatmap(mat_beta, 
-           display_numbers = mat_sig,
-           color = colorRampPalette(c("navy", "white", "firebrick3"))(100),
-           breaks = seq(-0.5, 0.5, length.out = 101),
-           cluster_rows = FALSE, 
-           cluster_cols = FALSE,
-           fontsize_number = 12,
-           border_color = "grey90")
+  network_object <- MetaNet::multi_net_build(
+    list(Microbiome = microbiome_matrix, Metabolome = metabolite_matrix),
+    r_threshold = r_threshold,
+    p_threshold = p_threshold,
+    use_p_adj = use_p_adj,
+    delete_single = delete_single
+  )
+
+  list(
+    network = network_object,
+    edge_table = as.data.frame(MetaNet::get_e(network_object))
+  )
 }
 
 # ------------------------------------------------------------------------------
-# 6. Figure 4: Multi-omics Integration (Procrustes & Network)
+# 6. Conservative mediation sensitivity analysis
 # ------------------------------------------------------------------------------
+run_subject_level_mediation_sensitivity <- function(data, exposure, mediator, outcome,
+                                                    covariates = NULL,
+                                                    subject_id_col = "infant_id",
+                                                    age_col = "postnatal_age_days",
+                                                    min_age_days = NULL,
+                                                    sims = 1000) {
+  model_columns <- unique(c(subject_id_col, exposure, mediator, outcome, covariates, age_col))
+  model_columns <- available_columns(data, model_columns)
+  model_data <- data %>% select(all_of(model_columns))
 
-# 6.1 Procrustes Plot
-plot_procrustes <- function(micro_dist, meta_matrix, map_df) {
-  # Align
-  ids <- intersect(labels(micro_dist), map_df$ID.seq)
-  d_micro <- as.dist(as.matrix(micro_dist)[ids, ids])
-  d_meta <- vegdist(meta_matrix[ids, ], method = "euclidean")
-  
-  # Test
-  set.seed(123)
-  pro <- protest(d_micro, d_meta, scores = "sites", permutations = 2000)
-  
-  # Plot Data
-  df_plot <- data.frame(
-    Micro1 = pro$X[,1], Micro2 = pro$X[,2],
-    Meta1 = pro$Yrot[,1], Meta2 = pro$Yrot[,2],
-    ID.seq = ids
-  ) %>% left_join(map_df, by="ID.seq")
-  
-  ggplot(df_plot) +
-    geom_segment(aes(x = Micro1, y = Micro2, xend = Meta1, yend = Meta2), 
-                 color = "grey80", alpha = 0.5) +
-    geom_point(aes(x = Micro1, y = Micro2), color = "#E64B35FF", size = 2, alpha=0.8) + # Micro
-    geom_point(aes(x = Meta1, y = Meta2), color = "#4DBBD5FF", size = 2, alpha=0.8) +   # Meta
-    annotate("text", x = min(df_plot$Micro1), y = max(df_plot$Micro2), 
-             label = paste0("Procrustes t0 = ", round(pro$t0, 3), "\nP = ", pro$signif)) +
-    labs(x = "PC1", y = "PC2", title = "Microbiome-Metabolome Concordance") +
-    theme_pub
-}
-
-# 6.2 WGCNA Module Construction
-run_wgcna_modules <- function(data_matrix, min_module_size = 30, merge_cor = 0.85) {
-  # data_matrix: Rows=Samples, Cols=Metabolites
-  allowWGCNAThreads()
-  
-  # Pick Power
-  sft <- pickSoftThreshold(data_matrix, powerVector = c(1:10, 12, 14), verbose = 0)
-  pow <- sft$powerEstimate
-  if(is.na(pow)) pow <- 6
-  
-  # Build Network
-  net <- blockwiseModules(data_matrix, power = pow,
-                          networkType = "signed hybrid",
-                          TOMType = "signed", minModuleSize = min_module_size,
-                          mergeCutHeight = 1 - merge_cor, numericLabels = TRUE,
-                          verbose = 0)
-  
-  # Return Eigengenes
-  MEs <- moduleEigengenes(data_matrix, colors = net$colors)$eigengenes
-  return(list(Net = net, MEs = MEs))
-}
-
-# ------------------------------------------------------------------------------
-# 7. Figure 5: Mediation Analysis
-# ------------------------------------------------------------------------------
-# For public release, mediation is implemented at the infant level after subject-level aggregation
-# to avoid pseudo-replication from repeated samples.
-run_mediation_summary <- function(data, x, m, y, covars,
-                                  id_var = "ID",
-                                  age_var = NULL,
-                                  min_age = NULL,
-                                  sims = 1000) {
-  vars <- unique(c(id_var, x, m, y, covars, age_var))
-  data_sub <- data %>% select(all_of(vars))
-
-  if (!is.null(age_var) && !is.null(min_age)) {
-    data_sub <- data_sub %>% filter(.data[[age_var]] >= min_age)
+  if (!is.null(min_age_days) && age_col %in% colnames(model_data)) {
+    model_data <- model_data %>% filter(.data[[age_col]] >= min_age_days)
   }
 
-  data_subject <- data_sub %>%
-    group_by(.data[[id_var]]) %>%
+  subject_level_data <- model_data %>%
+    group_by(.data[[subject_id_col]]) %>%
     summarise(
       across(
-        -all_of(id_var),
-        ~ if (is.numeric(.x)) median(.x, na.rm = TRUE) else {
-          vals <- .x[!is.na(.x)]
-          if (length(vals) == 0) NA else vals[[1]]
-        }
+        -all_of(subject_id_col),
+        ~ if (is.numeric(.x)) median(.x, na.rm = TRUE) else first_non_missing(.x)
       ),
       .groups = "drop"
     ) %>%
-    tidyr::drop_na(all_of(c(x, m, y, covars)))
+    tidyr::drop_na(all_of(c(exposure, mediator, outcome)))
 
-  model_m <- lm(as.formula(paste(m, "~", x, "+", paste(covars, collapse="+"))), data = data_subject)
-  model_y <- lm(as.formula(paste(y, "~", x, "+", m, "+", paste(covars, collapse="+"))), data = data_subject)
+  mediator_model <- lm(
+    as.formula(paste(mediator, "~", paste(c(exposure, available_columns(subject_level_data, covariates)), collapse = " + "))),
+    data = subject_level_data
+  )
 
-  set.seed(123)
-  med <- mediate(model_m, model_y, treat = x, mediator = m, boot = TRUE, sims = sims)
+  outcome_model <- lm(
+    as.formula(paste(outcome, "~", paste(c(exposure, mediator, available_columns(subject_level_data, covariates)), collapse = " + "))),
+    data = subject_level_data
+  )
 
-  return(data.frame(
-    n_subjects = nrow(data_subject),
-    ACME = med$d0,
-    ADE = med$z0,
-    Total_Effect = med$tau.coef,
-    Prop_Mediated = med$n0,
-    P_ACME = med$d0.p
-  ))
+  mediation_result <- mediate(
+    mediator_model,
+    outcome_model,
+    treat = exposure,
+    mediator = mediator,
+    boot = TRUE,
+    sims = sims
+  )
+
+  data.frame(
+    n_infants = nrow(subject_level_data),
+    ACME = mediation_result$d0,
+    ADE = mediation_result$z0,
+    Total_Effect = mediation_result$tau.coef,
+    Prop_Mediated = mediation_result$n0,
+    P_ACME = mediation_result$d0.p
+  )
 }
+```
 
-# End of analysis workflow.
-# Prepare required input objects before running the script.
+# Notes on release scope
+
+This representative public script focuses on the main analytical components that can be documented clearly and defended directly from the released code.
+
+Module-based metabolite analyses in the internal study workflow relied on locked eigengene objects generated during the project analysis. Those internal objects are not rebuilt here in order to avoid presenting a weaker ad hoc reconstruction as the original study pipeline.
+
+# Example analysis outline
+
+```{r}
+# Example: standardize the main analysis table to public-facing column names.
+# Replace the placeholder source column names below with the names used in your local tables.
+#
+# study_table <- standardize_study_table(
+#   raw_study_table,
+#   sample_id_col = "your_sample_identifier",
+#   infant_id_col = "your_infant_identifier",
+#   postnatal_age_col = "your_postnatal_age_column",
+#   gestational_age_col = "your_gestational_age_column",
+#   birth_weight_col = "your_birth_weight_column",
+#   sex_col = "your_sex_column",
+#   delivery_mode_col = "your_delivery_mode_column",
+#   additional_mapping = c(
+#     antibiotic_exposure_ratio_1w = "your_one_week_antibiotic_ratio_column",
+#     antibiotic_exposure_ratio_2w = "your_two_week_antibiotic_ratio_column"
+#   )
+# )
+#
+# Primary covariates used across adjusted models:
+# primary_covariates <- c(
+#   "delivery_mode",
+#   "gestational_age_weeks",
+#   "birth_weight_g",
+#   "sex",
+#   "multiple_gestation",
+#   "prenatal_antibiotics",
+#   "apgar_5min",
+#   "postnatal_age_days",
+#   "breastmilk_exposure_ratio_total",
+#   "formula_exposure_ratio_total",
+#   "antibiotic_exposure_ratio_total",
+#   "antifungal_exposure_ratio_total",
+#   "central_line_ratio_total",
+#   "invasive_ventilation_ratio_total",
+#   "probiotics_ratio_total",
+#   "ppi_ratio_total",
+#   "rbc_transfusion_ratio_total"
+# )
+#
+# Microbiome PERMANOVA:
+# microbiome_permanova <- run_permanova_summary(
+#   distance_matrix = microbiome_bray_distance,
+#   metadata = study_table,
+#   variables = primary_covariates
+# )
+#
+# Adjusted mixed-effects model for a single exposure:
+# antibiotic_model <- fit_adjusted_mixed_model(
+#   data = study_table,
+#   outcome = "microbial_load_log10",
+#   exposure = "antibiotic_exposure_ratio_total",
+#   covariates = setdiff(primary_covariates, "antibiotic_exposure_ratio_total"),
+#   subject_id_col = "infant_id",
+#   rescale_columns = c("postnatal_age_days", "antibiotic_exposure_ratio_total"),
+#   rescale_method = "minmax"
+# )
+#
+# Inter-omics network:
+# network_result <- build_metanet_interomics_network(
+#   microbiome_matrix = genus_abundance_matrix,
+#   metabolite_matrix = metabolite_matrix
+# )
+#
+# Conservative subject-level mediation sensitivity analysis:
+# mediation_result <- run_subject_level_mediation_sensitivity(
+#   data = study_table,
+#   exposure = "antibiotic_exposure_ratio_total",
+#   mediator = "clostridium_sensu_stricto_1_abundance",
+#   outcome = "fecal_calprotectin_log",
+#   covariates = c("postnatal_age_days"),
+#   subject_id_col = "infant_id",
+#   age_col = "postnatal_age_days",
+#   min_age_days = 14
+# )
 ```
