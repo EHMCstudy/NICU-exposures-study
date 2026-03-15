@@ -10,6 +10,7 @@ This repository was prepared by the study team to provide the public code locati
 
 - `code/FB_ABT_unload_final_2025.12.Rmd`: public entrypoint for the representative workflow
 - `code/R/`: modular analysis scripts grouped by method block
+- `code/workflows/`: compact result-oriented scripts aligned with the manuscript sections and figures
 - `docs/manuscript_availability_text.md`: manuscript-ready availability wording
 - `docs/public_release_checklist.md`: brief internal checklist for final public release checks
 

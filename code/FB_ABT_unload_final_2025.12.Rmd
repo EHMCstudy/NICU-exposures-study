@@ -10,7 +10,7 @@ This public script is the entrypoint for the representative analysis workflow us
 
 `Neonatal Intensive Care Unit Exposures Reprogram Microbiome-Metabolome Trajectories and Modulate Host Calprotectin in Preterm Infants: A Longitudinal Multi-omics Study`
 
-The code has been split into focused analysis modules so that external readers can review each methodological block separately. Internal study tables can be mapped to standardized public-facing column names before analysis.
+The code has been split into focused analysis modules and compact results-oriented workflow scripts so that external readers can review either the method blocks or the manuscript-aligned analysis sections. Internal study tables can be mapped to standardized public-facing column names before analysis.
 
 ```{r}
 module_dir <- if (dir.exists("R")) "R" else file.path("code", "R")
@@ -36,6 +36,14 @@ for (module_file in module_files) {
 - `R/03_mixed_models.R`: adjusted mixed-effects models and heatmap summaries
 - `R/04_interomics_network.R`: Procrustes summaries and MetaNet inter-omics network construction
 - `R/05_mediation_sensitivity.R`: conservative infant-level mediation sensitivity analysis
+
+# Manuscript-oriented workflow scripts
+
+- `workflows/01_preterm_gut_overview.R`: Figure 1 / early colonization overview
+- `workflows/02_nicu_exposures_microbiome.R`: Figure 2 / NICU exposures and microbiome structure
+- `workflows/03_antibiotic_regimen_effects.R`: Figure 3 / regimen-specific antibiotic effects
+- `workflows/04_metabolome_interomics.R`: Figure 4 / metabolome and inter-omics integration
+- `workflows/05_calprotectin_axis.R`: Figure 5 / calprotectin-associated analyses and conservative mediation sensitivity
 
 # Notes on release scope
 
